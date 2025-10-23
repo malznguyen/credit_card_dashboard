@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -197,6 +198,95 @@ def create_app() -> Flask:
         LOGGER.info("Returning default overview metrics")
         return jsonify(DEFAULT_OVERVIEW)
 
+    @app.route("/api/monthly-features", methods=["GET"])
+    def monthly_features():
+        page_raw = request.args.get("page", "1")
+        page_size_raw = request.args.get("page_size", "50")
+        customer_id = request.args.get("customer_id")
+        year_month = request.args.get("year_month")
+
+        try:
+            page_value = int(page_raw)
+            page_size_value = int(page_size_raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "page and page_size must be integers"}), 400
+
+        if page_value <= 0:
+            return jsonify({"error": "page must be a positive integer"}), 400
+
+        if page_size_value <= 0:
+            return jsonify({"error": "page_size must be a positive integer"}), 400
+
+        if page_size_value > 200:
+            return jsonify({"error": "page_size must not exceed 200"}), 400
+
+        customer_id = customer_id.strip() if isinstance(customer_id, str) else None
+        year_month = year_month.strip() if isinstance(year_month, str) else None
+
+        if year_month and not _is_valid_year_month(year_month):
+            return jsonify({"error": "year_month must be in YYYY-MM format"}), 400
+
+        if not MONTHLY_FEATURES_PATH.exists():
+            return jsonify({"error": "Monthly features data not found"}), 404
+
+        try:
+            dataframe = pd.read_csv(MONTHLY_FEATURES_PATH)
+        except (OSError, pd.errors.ParserError) as exc:
+            LOGGER.warning("Failed to load monthly features data: %s", exc)
+            return jsonify({"error": "Unable to load monthly features data"}), 500
+
+        customer_column = _identify_column(
+            dataframe.columns,
+            ("CustomerID", "CustomerId", "customer_id", "customerID"),
+        )
+
+        if customer_column is None:
+            LOGGER.warning("Customer identifier column not found for monthly features")
+            return jsonify({"error": "CustomerID column not available"}), 500
+
+        if "YearMonth" not in dataframe.columns:
+            LOGGER.warning("YearMonth column not found for monthly features")
+            return jsonify({"error": "YearMonth column not available"}), 500
+
+        filtered = dataframe.copy()
+
+        if customer_id:
+            filtered = filtered[
+                filtered[customer_column].astype(str).str.strip() == customer_id
+            ]
+
+        if year_month:
+            filtered = filtered[filtered["YearMonth"].astype(str) == year_month]
+
+        filtered = filtered.sort_values(
+            by=[customer_column, "YearMonth"],
+            ascending=[True, True],
+            kind="mergesort",
+        ).reset_index(drop=True)
+
+        total_rows = int(filtered.shape[0])
+        total_pages = (
+            (total_rows + page_size_value - 1) // page_size_value if total_rows else 0
+        )
+
+        start_index = (page_value - 1) * page_size_value
+        end_index = start_index + page_size_value
+
+        paginated = filtered.iloc[start_index:end_index]
+        paginated = paginated.where(pd.notnull(paginated), None)
+
+        rows = paginated.to_dict(orient="records")
+
+        response_payload = {
+            "page": page_value,
+            "page_size": page_size_value,
+            "total_rows": total_rows,
+            "total_pages": total_pages,
+            "rows": rows,
+        }
+
+        return jsonify(response_payload)
+
     @app.route("/api/predict", methods=["POST"])
     def predict():
         payload = request.get_json(silent=True)
@@ -345,6 +435,19 @@ def _mock_prediction(features: Dict[str, float]) -> float:
 
     prediction = txn_component + peak_component + weekend_component
     return round(max(prediction, 0.0), 2)
+
+
+def _is_valid_year_month(value: str) -> bool:
+    """Validate YYYY-MM formatted strings with a calendar-aware check."""
+    if not isinstance(value, str):
+        return False
+
+    match = re.fullmatch(r"(\d{4})-(\d{2})", value)
+    if not match:
+        return False
+
+    month = int(match.group(2))
+    return 1 <= month <= 12
 
 
 app = create_app()

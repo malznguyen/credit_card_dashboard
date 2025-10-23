@@ -14,6 +14,7 @@ import {
   fetchOverview,
   predict as requestPrediction,
 } from './api/dashboardApi';
+import MonthlyTable from './components/MonthlyTable';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
@@ -431,6 +432,8 @@ export default function App() {
             </form>
           </Card>
         </div>
+
+        <MonthlyTable />
       </div>
     </div>
   );
