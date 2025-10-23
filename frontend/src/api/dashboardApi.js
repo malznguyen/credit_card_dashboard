@@ -38,6 +38,31 @@ export async function fetchOverview() {
   return parseResponse(response, 'Overview metrics request');
 }
 
+export async function fetchMonthlyFeatures({
+  page = 1,
+  pageSize = 50,
+  customerId,
+  yearMonth,
+  signal,
+} = {}) {
+  const params = new URLSearchParams();
+  params.set('page', String(page));
+  params.set('page_size', String(pageSize));
+
+  if (customerId) {
+    params.set('customer_id', customerId);
+  }
+
+  if (yearMonth) {
+    params.set('year_month', yearMonth);
+  }
+
+  const queryString = params.toString();
+  const url = `${BASE_URL}/api/monthly-features${queryString ? `?${queryString}` : ''}`;
+  const response = await fetch(url, { signal });
+  return parseResponse(response, 'Monthly features request');
+}
+
 export async function predict(body) {
   const response = await fetch(`${BASE_URL}/api/predict`, {
     method: 'POST',
